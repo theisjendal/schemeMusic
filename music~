@@ -1,0 +1,31 @@
+#lang racket
+; OOP Helper methods
+; Instantiate method
+(define (new-instance class . parameters)
+ (let ((instance (apply class parameters)))
+   (virtual-operations instance)
+   instance))
+
+; Arrange for virtual operations in object
+(define (virtual-operations object)
+  (send 'set-self! object object))
+
+; 
+(define (new-part class . parameters)
+  (apply class parameters))
+
+;
+(define (method-lookup object selector)
+  (cond ((procedure? object) (object selector))
+         (else (error "Inappropriate object in method-lookup: " object))))
+
+(define (send message object . args)
+  (let ((method (method-lookup object message)))
+    (cond ((procedure? method) (apply method args))
+          ((null? method) (error "Message not understood: " message))
+          (else (error "Inappropriate result of method lookup: " method)))))
+
+; Classes
+(define (element length start-time)
+  (let 
+
