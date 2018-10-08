@@ -18,7 +18,7 @@
 (define bpm 60)
 
 (define (get-value key element)
-  (cdr (assoc key element)))
+  (cdr (assq key element)))
 
 (define (get-value-prod key procedure)
   (get-value key (uncurry procedure)))
@@ -46,8 +46,8 @@
 ;; Element definitions
 ;; ------------------------------
 
-(define (music-element element instrument  starttime)
-  (lambda () (element instrument starttime)))
+;(define (music-element element instrument)
+;  (lambda () (element instrument)))
 
 (define (pause length)
   (lambda (instrument starttime)
@@ -69,8 +69,8 @@
       (error "Sequence must contain at least one element")
       (lambda (instrument starttime)
         (letrec ((calculate-subtree (lambda (startt total-length processed head tail)
-                                      (let* ((e (music-element head instrument startt)) ; set starttime of head element as music-element
-                                             (e-len (get-value-prod 'length e))   ; get length of element
+                                      (let* ((e (head instrument startt)) ; set starttime of head element as music-element
+                                             (e-len (get-value 'length e))   ; get length of element
                                              (tl (+ e-len total-length))     ; calculate total length of sequence so far
                                              (proc (cons e processed)))      ; add element to processed
                                         
@@ -88,8 +88,8 @@
       (error "Parallel must contain at least two elements")
       (lambda (instrument starttime)
         (letrec ((calculate-subtree (lambda (max-len processed head tail)
-                                     (let* ((e (music-element head instrument starttime)) ; set starttime of head element as music-element
-                                            (e-len (get-value-prod 'length e))   ; get length of element
+                                     (let* ((e (head instrument starttime)) ; set starttime of head element as music-element
+                                            (e-len (get-value 'length e))   ; get length of element
                                             (len (if (> e-len max-len) e-len max-len))
                                             (proc (cons e processed)))      ; add element to processed
                                        
@@ -121,7 +121,7 @@
 (define (parse-sequence element)
   (letrec ((elements (get-value 'elements element))
            (parse-helper (lambda (head tail)
-                           (let ((parsed (get-as-midi (uncurry head))))
+                           (let ((parsed (get-as-midi head)))
                              (if (null? tail)
                                  (cons-helper parsed '())
                                  (cons-helper parsed
@@ -133,7 +133,7 @@
            (parse-helper (lambda (rest)
                            (if (null? rest)
                                '()
-                               (cons-helper (get-as-midi (uncurry (car rest))) (parse-helper (cdr rest)))))))
+                               (cons-helper (get-as-midi (car rest)) (parse-helper (cdr rest)))))))
     (parse-helper elements)))
 
 (define (parse-note element)
@@ -185,11 +185,21 @@
         ((pause? element) '())
         (else (error "Invalid element, was:" element))))
 
+;(define (scale value element)
+;  (cond (note? element) (
+
+                         
+;(define (update-multi-attr-element alist element function)
+;  (if (null? alist)
+;      element
+;      (let* ((pair (car alist))
+;            (key (car pair)))
+;        (
         
 (define (update-elements  attribute-value elements function)
   (if (null? elements)
       '()
-      (cons-helper (lambda () (function attribute-value (uncurry (car elements))))
+      (cons-helper (function attribute-value (car elements))
                    (update-elements attribute-value (cdr elements) function))))
 
 (define (update-element attribute attribute-value element)
