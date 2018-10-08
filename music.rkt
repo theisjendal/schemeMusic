@@ -30,16 +30,31 @@
   '((piano . 1) (organ . 2) (guitar . 3) (violin . 4) (flute . 5) (trumpet . 6) (helicopter . 7) (telephone . 8)))
 
 (define (note? element)
-    (eq? (get-value 'type element) 'note))
+    (and (music-element? element)
+         (and (assq 'tone element)
+              (and (assq 'octave element)
+                   (and (assq'instrument element)
+                        (eq? (get-value 'type element) 'note))))))
 
 (define (pause? element)
-  (eq? (assq 'type element) 'pause))
+  (and (music-element? element)
+       (eq? (get-value 'type element) 'pause)))
 
 (define (sequence? element)
-  (eq? (get-value 'type element) 'sequence))
+  (and (music-element? element)
+       (and (assq 'elements element)
+            (eq? (get-value 'type element) 'sequence))))
 
 (define (parallel? element)
-  (eq? (get-value 'type element) 'parallel))
+  (and (music-element? element)
+       (and (assq 'elements element)
+            (eq? (get-value 'type element) 'parallel))))
+
+; Is a music element if it contains duration, starttime, and type
+(define (music-element? element)
+  (and (assq 'duration element)
+       (and (assq 'starttime element)
+            (assq 'type element))))
 
 
 ;; ------------------------------
@@ -49,18 +64,18 @@
 ;(define (music-element element instrument)
 ;  (lambda () (element instrument)))
 
-(define (pause length)
+(define (pause duration)
   (lambda (instrument starttime)
     (list (cons 'starttime starttime)
           (cons 'type 'pause)
-          (cons 'length length))))
+          (cons 'duration duration))))
 
-(define (note tone length octave)
+(define (note tone duration octave)
   (lambda (instrument starttime)
     (list (cons 'starttime starttime)
           (cons 'type 'note)
           (cons 'tone tone)
-          (cons 'length length)
+          (cons 'duration duration)
           (cons 'octave octave)
           (cons 'instrument instrument))))
 
@@ -68,44 +83,39 @@
   (if (null? elements)
       (error "Sequence must contain at least one element")
       (lambda (instrument starttime)
-        (letrec ((calculate-subtree (lambda (startt total-length processed head tail)
+        (letrec ((calculate-subtree (lambda (startt total-duration processed head tail)
                                       (let* ((e (head instrument startt)) ; set starttime of head element as music-element
-                                             (e-len (get-value 'length e))   ; get length of element
-                                             (tl (+ e-len total-length))     ; calculate total length of sequence so far
+                                             (e-len (get-value 'duration e))   ; get duration of element
+                                             (td (+ e-len total-duration))     ; calculate total duration of sequence so far
                                              (proc (cons e processed)))      ; add element to processed
                                         
                                         (if (null? tail)
                                             (list (cons 'elements (reverse proc))
-                                                  (cons 'length tl))        ; Return alist with elements and length
-                                            (calculate-subtree (+ startt e-len) tl proc (car tail) (cdr tail)))))))  ; Calculate next element
+                                                  (cons 'duration td))        ; Return alist with elements and duration
+                                            (calculate-subtree (+ startt e-len) td proc (car tail) (cdr tail)))))))  ; Calculate next element
           
                  (append-alists (calculate-subtree starttime 0 '() (car elements) (cdr elements))
                                 (list (cons 'type 'sequence) (cons 'starttime starttime)))))))
 
 
 (define (parallel . elements)
-  (if (or (null? elements) (null? (cdr elements)))
+  (if (and (not (list? elements))
+           (or (null? elements) (null? (cdr elements))))
       (error "Parallel must contain at least two elements")
       (lambda (instrument starttime)
         (letrec ((calculate-subtree (lambda (max-len processed head tail)
                                      (let* ((e (head instrument starttime)) ; set starttime of head element as music-element
-                                            (e-len (get-value 'length e))   ; get length of element
+                                            (e-len (get-value 'duration e))   ; get duration of element
                                             (len (if (> e-len max-len) e-len max-len))
                                             (proc (cons e processed)))      ; add element to processed
                                        
                                        (cond ((null? tail) (list (cons 'elements (reverse proc))
-                                                                 (cons 'length len)))
+                                                                 (cons 'duration len)))
                                              (else (calculate-subtree len proc (car tail) (cdr tail))))))))
           
           (append-alists (calculate-subtree 0 '() (car elements) (cdr elements))
                          (list (cons 'type 'parallel)
                                (cons 'starttime starttime)))))))
-
-;; ------------------------------
-;; Element manipulation functions
-;; ------------------------------
-
-
 
 ;; ------------------------------
 ;; MIDI functions
@@ -141,7 +151,7 @@
                                            (get-value (get-value 'instrument element) channels)
                                            (calc-pitch (get-value 'tone element) (get-value 'octave element))
                                            80
-                                           (calc-time-unit (get-value 'length element)))))
+                                           (calc-time-unit (get-value 'duration element)))))
 
 ;; ------------------------------
 ;; Transform functions
@@ -149,15 +159,9 @@
 (define (re-instrument instrument element)
   (cond ((or (sequence? element)
              (parallel? element))
-           
-         ; Update instrument value
-         (update-element 'instrument
-                         instrument
-                         ; Update elements key
-                         (update-element 'elements
-                                         ; Update all sub elements
-                                         (update-elements instrument (get-value 'elements element) re-instrument)
-                                         element))) ; Element to update (for both)
+         (update-element-multi (list 'instrument 'elements)
+                               (list instrument (update-elements instrument (get-value 'elements element) re-instrument))
+                               element)) ; Element to update (for both)
         ; Update if note
         ((note? element) (update-element 'instrument
                                           instrument
@@ -172,11 +176,7 @@
                                 (octave (- (quotient pitch 12) 2)) 
                                 (val (+ (modulo pitch 12) 24))
                                 (tone (get-tone-from-value val base-notes)))
-                           (update-element 'tone
-                                           tone
-                                           (update-element 'octave
-                                                           octave
-                                                           element))))
+                           (update-element-multi (list 'tone 'octave) (list tone octave) element)))
         ((or (sequence? element)
              (parallel? element))
          (update-element 'elements
@@ -185,18 +185,48 @@
         ((pause? element) '())
         (else (error "Invalid element, was:" element))))
 
-;(define (scale value element)
-;  (cond (note? element) (
+(define (scale scaler element)
+  (scale-helper scaler (get-value 'starttime element) element))
 
-                         
-;(define (update-multi-attr-element alist element function)
-;  (if (null? alist)
-;      element
-;      (let* ((pair (car alist))
-;            (key (car pair)))
-;        (
+
+(define (scale-helper scaler starttime element)
+  (cond ((or (note? element)
+             (pause? element)) (update-element-multi (list 'duration 'starttime)
+                                                     (list (* (get-value 'duration element) scaler) starttime)
+                                                     element))
+        ((sequence? element) (scale-sequence scaler starttime element))
+        (else (error "not implemented yet"))))
+
+                                                                            
+(define (scale-sequence scaler starttime element)
+  (letrec ((scale-sequence-helper (lambda (elements starttime)
+                                 (if (null? elements)
+                                     '()
+                                     (let* ((e (scale-helper scaler starttime (car elements)))
+                                            (st (+ starttime (get-value 'duration e))))
+                                       (cons e (scale-sequence-helper (cdr elements) st)))))))
+    (scale-sequence-helper (get-value 'elements element) starttime)))
+
+(define (scale-parallel scaler starttime element)
+  (letrec ((scale-sequence-helper (lambda (elements starttime duration)
+                                 (if (null? elements)
+                                     '()
+
+(define (update-element-multi keys values element)
+  (cond ((or (null? keys)
+             (null? values))
+         (if (and (null? keys)
+                  (null? values))
+             element
+             (error "Must equally many keys and values, only:" keys values)))
+        (else (let ((key (car keys))
+                    (value (car values)))
+                (update-element-multi (cdr keys)
+                                      (cdr values)
+                                      (update-element key value element))))))
+              
         
-(define (update-elements  attribute-value elements function)
+(define (update-elements attribute-value elements function)
   (if (null? elements)
       '()
       (cons-helper (function attribute-value (car elements))
@@ -223,14 +253,15 @@
       element2
       (cons element1 element2)))
 
+; flattens a midi song
 (define (flatten midi)
   (cond ((null? midi) '())
         ((eq? (car midi) 'note-abs-time-with-duration) (list midi))
         (else (append (flatten (car midi)) (flatten (cdr midi))))))
 
-(define (calc-time-unit length)
+(define (calc-time-unit duration)
   (let ((sec-per-beat (* 60 (/ 4 bpm))))
-    (* (* length sec-per-beat) units-per-sec)))
+    (* (* duration sec-per-beat) units-per-sec)))
 
 (define (calc-pitch tone octave)
   (let ((pitch (+ (get-value tone base-notes) (* 12 octave))))
