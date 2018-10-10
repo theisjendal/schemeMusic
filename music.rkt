@@ -11,6 +11,11 @@
        (cons (car key-list) (car value-list))
        (pair-up (cdr key-list) (cdr value-list)))))
 
+(define (curry2 f)
+  (lambda (x)
+    (lambda (y)
+      (f x y))))
+
 ;; ------------------------------
 ;; Base methods
 ;; ------------------------------
@@ -103,20 +108,19 @@
            (or (null? elements) (null? (cdr elements))))
       (error "Parallel must contain at least two elements")
       (lambda (instrument starttime)
-        (letrec ((calculate-subtree (lambda (max-len processed head tail)
-                                     (let* ((e (head instrument starttime)) ; set starttime of head element as music-element
-                                            (e-len (get-value 'duration e))   ; get duration of element
-                                            (len (if (> e-len max-len) e-len max-len))
-                                            (proc (cons e processed)))      ; add element to processed
-                                       
-                                       (cond ((null? tail) (list (cons 'elements (reverse proc))
-                                                                 (cons 'duration len)))
-                                             (else (calculate-subtree len proc (car tail) (cdr tail))))))))
+        (let* ((calc-elements (map (lambda (x) (x instrument starttime)) elements))
+               (max-duration (get-value 'duration (apply max-duration calc-elements))))
           
-          (append-alists (calculate-subtree 0 '() (car elements) (cdr elements))
-                         (list (cons 'type 'parallel)
-                               (cons 'starttime starttime)))))))
+          
+          (list (cons 'elements calc-elements)
+                (cons 'duration max-duration)
+                (cons 'type 'parallel)
+                (cons 'starttime starttime))))))
 
+(define (max-duration x y)
+  (let ((dx (get-value 'duration x))
+        (dy (get-value 'duration y)))
+    (if (> dx dy) x y)))
 ;; ------------------------------
 ;; MIDI functions
 ;; ------------------------------
@@ -159,9 +163,10 @@
 (define (re-instrument instrument element)
   (cond ((or (sequence? element)
              (parallel? element))
-         (update-element-multi (list 'instrument 'elements)
-                               (list instrument (update-elements instrument (get-value 'elements element) re-instrument))
-                               element)) ; Element to update (for both)
+         (let ((re-i ((curry2 re-instrument) instrument)))
+           (update-element-multi (list 'instrument 'elements)
+                                 (list instrument (map re-i (get-value 'elements element)))
+                                 element))) ; Element to update (for both)
         ; Update if note
         ((note? element) (update-element 'instrument
                                           instrument
@@ -179,9 +184,10 @@
                            (update-element-multi (list 'tone 'octave) (list tone octave) element)))
         ((or (sequence? element)
              (parallel? element))
-         (update-element 'elements
-                         (update-elements value (get-value 'elements element) transpose)
-                         element))
+         (let ((trans ((curry2 transpose) value)))
+           (update-element 'elements
+                           (map transpose (get-value 'elements element))
+                           element)))
         ((pause? element) '())
         (else (error "Invalid element, was:" element))))
 
@@ -216,16 +222,12 @@
                           element)))
 
 (define (scale-parallel scaler starttime element)
-  (letrec ((scale-parallel-helper (lambda (elements)
-                                 (if (null? elements)
-                                     '()
-                                     (cons (scale-helper scaler starttime (car elements))
-                                           (scale-parallel-helper (cdr elements)))))))
+  (let* ((scal ((curry2 scale-helper) scaler)))
     ; Update multiple attributes of element
     (update-element-multi (list 'duration 'starttime 'elements)
                           (list (* (get-value 'duration element) scaler)
                                 starttime
-                                (scale-parallel-helper (get-value 'elements element)))
+                                (map scal (get-value 'elements element)))
                           element)))
 
 (define (update-element-multi keys values element)
@@ -240,13 +242,6 @@
                 (update-element-multi (cdr keys)
                                       (cdr values)
                                       (update-element key value element))))))
-              
-        
-(define (update-elements attribute-value elements function)
-  (if (null? elements)
-      '()
-      (cons-helper (function attribute-value (car elements))
-                   (update-elements attribute-value (cdr elements) function))))
 
 (define (update-element attribute attribute-value element)
   (cons (cons attribute attribute-value) element))
@@ -256,10 +251,39 @@
 ;; ------------------------------
 
 (define (get-poly-degree element)
-  (letrec ((get-timespand (lamda (e)
-                                 (if (or (parallel? e)
-                                         (sequence? e))
-                                     (
+  (letrec ((get-timespan (lambda (e)
+                                (cond ((or (parallel? e)
+                                           (sequence? e))
+                                       (map get-timespan (get-value 'elements e)))
+                                      ((note? e)
+                                       (cons (get-value 'starttime e)
+                                             (get-value 'duration e)))
+                                      ((pause? e) '())
+                                      (else "Error, unknown element:" e))))
+           
+           (calculated (map (lambda (x) (+ (car x) (cdr x)))
+                            (sort (flatten-alist (get-timespan element))
+                                  (lambda (x y) (if (eq? (car x) (car y))
+                                                    (> (cdr x) (cdr y))
+                                                    (< (car x) (car y)))))))
+           
+           (count (lambda (lst)
+                    (if (null? lst)
+                        0
+                        (let ((this-c (counter (car lst) (cdr lst)))
+                              (rest-c (count (cdr lst))))
+                          (if (>= this-c rest-c)
+                              this-c
+                              rest-c))))))
+                          
+    (+ (count calculated) 1)))
+
+
+(define (counter e lst)
+  (cond ((null? lst) 0)
+        ((>= e (car lst)) (+ (counter e (cdr lst)) 1))
+        (else (counter e (cdr lst)))))
+
 
 ; Calls functions with no parameters, more descriptive than parenthesis.
 (define (uncurry f)
@@ -276,11 +300,16 @@
       element2
       (cons element1 element2)))
 
+(define (flatten-alist alist)
+  (cond ((null? alist) '())
+        ((list? alist) (append (flatten-alist (car alist)) (flatten-alist (cdr alist))))
+        (else (list alist))))
+
 ; flattens a midi song
-(define (flatten midi)
+(define (flatten-midi midi)
   (cond ((null? midi) '())
-        ((eq? (car midi) 'note-abs-time-with-duration) (list midi))
-        (else (append (flatten (car midi)) (flatten (cdr midi))))))
+        ((list? (car midi)) (append (flatten-midi (car midi)) (flatten-midi (cdr midi))))
+        (else (list midi))))
 
 (define (calc-time-unit duration)
   (let ((sec-per-beat (* 60 (/ 4 bpm))))
@@ -306,9 +335,9 @@
 ;; test melodies
 ;; ------------------------------
 
-(define testf (sequence (parallel (note 'C 1/8 2) (note 'C# 1/4 3)) (note 'D 1/4 2)))
+(define testf (sequence (note 'D 1/4 2) (parallel (note 'C 1/8 2) (note 'C# 1/4 3)) (note 'D 1/4 2)))
 (define test (testf 'guitar 0))
-(define parse-test ((sequence (note 'C 1/8 2) (pause 1/8) (note 'C# 1/4 3)) 'guitar 0))
+(define parse-test ((sequence (note 'C 1/8 2) (pause 1/8) (note 'C# 1/4 3) (parallel (sequence (note 'G 1/4 2) (note 'D 1/4 2)) (sequence (note 'G 1/4 2) (note 'D 1/4 2)))) 'guitar 0))
 (define test-note ((note 'C 1/2 2) 'guitar 0))
 
 ; Mester Jakob
