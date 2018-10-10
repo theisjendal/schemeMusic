@@ -195,22 +195,38 @@
                                                      (list (* (get-value 'duration element) scaler) starttime)
                                                      element))
         ((sequence? element) (scale-sequence scaler starttime element))
+        ((parallel? element) (scale-parallel scaler starttime element))
         (else (error "not implemented yet"))))
 
                                                                             
 (define (scale-sequence scaler starttime element)
   (letrec ((scale-sequence-helper (lambda (elements starttime)
-                                 (if (null? elements)
-                                     '()
-                                     (let* ((e (scale-helper scaler starttime (car elements)))
-                                            (st (+ starttime (get-value 'duration e))))
-                                       (cons e (scale-sequence-helper (cdr elements) st)))))))
-    (scale-sequence-helper (get-value 'elements element) starttime)))
+                                    (if (null? elements)
+                                        '()
+                                        ; Else we update the next element, calculate next starttime and move on
+                                        (let* ((e (scale-helper scaler starttime (car elements)))
+                                               (st (+ starttime (get-value 'duration e))))
+                                          (cons e (scale-sequence-helper (cdr elements) st)))))))
+    ; Update multiple attributes of element
+    (update-element-multi (list 'duration 'starttime 'elements)
+                          (list (* (get-value 'duration element) scaler)
+                                starttime
+                                (scale-sequence-helper (get-value 'elements element)
+                                                       starttime))
+                          element)))
 
 (define (scale-parallel scaler starttime element)
-  (letrec ((scale-sequence-helper (lambda (elements starttime duration)
+  (letrec ((scale-parallel-helper (lambda (elements)
                                  (if (null? elements)
                                      '()
+                                     (cons (scale-helper scaler starttime (car elements))
+                                           (scale-parallel-helper (cdr elements)))))))
+    ; Update multiple attributes of element
+    (update-element-multi (list 'duration 'starttime 'elements)
+                          (list (* (get-value 'duration element) scaler)
+                                starttime
+                                (scale-parallel-helper (get-value 'elements element)))
+                          element)))
 
 (define (update-element-multi keys values element)
   (cond ((or (null? keys)
@@ -238,6 +254,13 @@
 ;; ------------------------------
 ;; Utility functions
 ;; ------------------------------
+
+(define (get-poly-degree element)
+  (letrec ((get-timespand (lamda (e)
+                                 (if (or (parallel? e)
+                                         (sequence? e))
+                                     (
+
 ; Calls functions with no parameters, more descriptive than parenthesis.
 (define (uncurry f)
   (f))
